@@ -110,7 +110,7 @@ namespace EDINETHtmlExtractor
                 HtmlNode startNode = null;
                 HtmlNode endNode = null;
 
-                // 見出しの検索
+                // 見出しの検索 - 修正：常に終了見出しを検索するように変更
                 foreach (var tag in headingTags)
                 {
                     var nodes = doc.DocumentNode.SelectNodes($"//{tag}");
@@ -122,28 +122,39 @@ namespace EDINETHtmlExtractor
                         startNode = nodes.FirstOrDefault(n => n.InnerText.Contains(START_SECTION_TITLE));
                     }
 
-                    // 終了見出しの検索（抽出が始まっている場合）
-                    if (extractionStarted && endNode == null)
+                    // 終了見出しの検索（常に検索する）
+                    if (endNode == null)
                     {
                         endNode = nodes.FirstOrDefault(n => n.InnerText.Contains(END_SECTION_TITLE));
                     }
                 }
 
-                // ファイル内に開始見出しが見つかった場合
-                if (startNode != null && !extractionStarted)
+                // 同一ファイル内に開始見出しと終了見出しの両方がある場合
+                if (startNode != null && endNode != null && !extractionStarted)
                 {
+                    Console.WriteLine("同一ファイル内に開始見出しと終了見出しの両方が見つかりました。");
                     extractionStarted = true;
                     ExtractFromStartNode(startNode, endNode, doc);
+                    extractionCompleted = true;  // このファイルで抽出完了とマーク
+                }
+                // ファイル内に開始見出しのみがある場合
+                else if (startNode != null && !extractionStarted)
+                {
+                    Console.WriteLine("開始見出しが見つかりました。");
+                    extractionStarted = true;
+                    ExtractFromStartNode(startNode, null, doc);
                 }
                 // 既に抽出が始まっていて、このファイルに終了見出しがある場合
-                else if (extractionStarted && endNode != null)
+                else if (extractionStarted && endNode != null && !extractionCompleted)
                 {
+                    Console.WriteLine("終了見出しが見つかりました。");
                     ExtractUntilEndNode(endNode, doc);
                     extractionCompleted = true;
                 }
                 // 既に抽出が始まっていて、このファイルに終了見出しがない場合
                 else if (extractionStarted && !extractionCompleted)
                 {
+                    Console.WriteLine("抽出中：このファイルは全体を抽出します。");
                     // ファイル全体を抽出
                     ExtractEntireFile(doc);
                 }
