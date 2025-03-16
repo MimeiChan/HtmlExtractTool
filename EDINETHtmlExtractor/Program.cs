@@ -15,16 +15,16 @@ namespace EDINETHtmlExtractor
     {
         // 抽出対象の開始見出し
         private const string START_SECTION_TITLE = "【損益計算書】";
-        // 抽出対象の終了見出し
-        private const string END_SECTION_TITLE = "【資本変動計算書】";
+        // 抽出対象の終了見出し - 変更
+        private const string END_SECTION_TITLE = "【株主資本等変動計算書】";
 
         // 抽出状態を管理する変数
         private bool extractionStarted = false;
         private bool extractionCompleted = false;
         private List<string> extractedContentList = new List<string>();
         
-        // スタイル情報を保持する変数（新規追加）
-        private List<string> extractedStylesList = new List<string>();
+        // スタイル情報を保持する変数
+        private HashSet<string> extractedStylesList = new HashSet<string>();
 
         /// <summary>
         /// ディレクトリ内のHTMLファイルから指定されたセクションを抽出する
@@ -55,7 +55,7 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
-                extractedStylesList.Clear(); // スタイルリストもクリア
+                extractedStylesList.Clear();
 
                 // 各ファイルを順番に処理
                 foreach (string htmlFile in htmlFiles)
@@ -71,7 +71,7 @@ namespace EDINETHtmlExtractor
                 // 抽出が始まったが完了しなかった場合
                 if (extractionStarted && !extractionCompleted)
                 {
-                    Console.WriteLine("警告: 【損益計算書】セクションは見つかりましたが、【資本変動計算書】セクションが見つかりませんでした。");
+                    Console.WriteLine($"警告: {START_SECTION_TITLE}セクションは見つかりましたが、{END_SECTION_TITLE}セクションが見つかりませんでした。");
                     Console.WriteLine("最後のファイルまで抽出を行います。");
                 }
 
@@ -84,13 +84,14 @@ namespace EDINETHtmlExtractor
                 }
                 else
                 {
-                    Console.WriteLine("【損益計算書】セクションが見つかりませんでした。");
+                    Console.WriteLine($"{START_SECTION_TITLE}セクションが見つかりませんでした。");
                     return false;
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"エラーが発生しました: {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
                 return false;
             }
         }
@@ -105,9 +106,12 @@ namespace EDINETHtmlExtractor
             {
                 // HTMLファイルを読み込む
                 HtmlDocument doc = new HtmlDocument();
+                doc.OptionFixNestedTags = true;
+                doc.OptionReadEncoding = true;
+                doc.OptionCheckSyntax = false;
                 doc.Load(htmlFilePath, Encoding.UTF8);
 
-                // スタイル情報を抽出（新規追加）
+                // スタイル情報を抽出
                 ExtractStyles(doc);
 
                 // 可能性のある見出し要素を定義
@@ -117,7 +121,7 @@ namespace EDINETHtmlExtractor
                 HtmlNode startNode = null;
                 HtmlNode endNode = null;
 
-                // 見出しの検索 - 修正：常に終了見出しを検索するように変更
+                // 見出しの検索
                 foreach (var tag in headingTags)
                 {
                     var nodes = doc.DocumentNode.SelectNodes($"//{tag}");
@@ -127,12 +131,20 @@ namespace EDINETHtmlExtractor
                     if (!extractionStarted && startNode == null)
                     {
                         startNode = nodes.FirstOrDefault(n => n.InnerText.Contains(START_SECTION_TITLE));
+                        if (startNode != null)
+                        {
+                            Console.WriteLine($"開始見出しが見つかりました: {startNode.InnerText}");
+                        }
                     }
 
                     // 終了見出しの検索（常に検索する）
                     if (endNode == null)
                     {
                         endNode = nodes.FirstOrDefault(n => n.InnerText.Contains(END_SECTION_TITLE));
+                        if (endNode != null)
+                        {
+                            Console.WriteLine($"終了見出しが見つかりました: {endNode.InnerText}");
+                        }
                     }
                 }
 
@@ -162,326 +174,436 @@ namespace EDINETHtmlExtractor
                 else if (extractionStarted && !extractionCompleted)
                 {
                     Console.WriteLine("抽出中：このファイルは全体を抽出します。");
-                    // ファイル全体を抽出
                     ExtractEntireFile(doc);
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"ファイル処理中にエラーが発生しました: {htmlFilePath}, {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
             }
         }
 
         /// <summary>
-        /// HTMLドキュメントからスタイル情報を抽出する（新規追加）
+        /// HTMLドキュメントからスタイル情報を抽出する
         /// </summary>
         /// <param name="doc">HTMLドキュメント</param>
         private void ExtractStyles(HtmlDocument doc)
         {
-            // headタグ内のstyleタグを抽出
-            var styleNodes = doc.DocumentNode.SelectNodes("//head/style");
-            if (styleNodes != null)
+            try
             {
-                foreach (var styleNode in styleNodes)
+                // headタグ内のstyleタグを抽出
+                var styleNodes = doc.DocumentNode.SelectNodes("//head/style");
+                if (styleNodes != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(styleNode.InnerHtml) && 
-                        !extractedStylesList.Contains(styleNode.InnerHtml))
+                    foreach (var styleNode in styleNodes)
                     {
-                        extractedStylesList.Add(styleNode.InnerHtml);
-                        Console.WriteLine("スタイル情報を抽出しました。");
+                        string styleContent = styleNode.InnerHtml;
+                        if (!string.IsNullOrWhiteSpace(styleContent) && 
+                            !extractedStylesList.Contains(styleContent))
+                        {
+                            extractedStylesList.Add(styleContent);
+                            Console.WriteLine("スタイル情報を抽出しました。");
+                        }
+                    }
+                }
+
+                // headタグ内の最初のstyleタグ前にあるインラインスタイル定義を抽出
+                var headNode = doc.DocumentNode.SelectSingleNode("//head");
+                if (headNode != null)
+                {
+                    string headText = headNode.InnerText;
+                    // CSSのようなスタイル定義を抽出する正規表現パターン
+                    var cssPattern = @"\.[\w-]+ *\{ *[^}]+ *\}";
+                    var cssMatches = Regex.Matches(headText, cssPattern);
+                    
+                    foreach (Match match in cssMatches)
+                    {
+                        string cssRule = match.Value;
+                        if (!string.IsNullOrWhiteSpace(cssRule) && 
+                            !extractedStylesList.Contains(cssRule))
+                        {
+                            extractedStylesList.Add(cssRule);
+                            Console.WriteLine("インラインCSSルールを抽出しました。");
+                        }
+                    }
+                }
+
+                // headタグ内のlinkタグ（外部スタイルシート）を抽出
+                var linkNodes = doc.DocumentNode.SelectNodes("//head/link[@rel='stylesheet']");
+                if (linkNodes != null)
+                {
+                    foreach (var linkNode in linkNodes)
+                    {
+                        string href = linkNode.GetAttributeValue("href", "");
+                        if (!string.IsNullOrWhiteSpace(href))
+                        {
+                            string linkOuterHtml = linkNode.OuterHtml;
+                            if (!extractedStylesList.Contains(linkOuterHtml))
+                            {
+                                extractedStylesList.Add(linkOuterHtml);
+                                Console.WriteLine("外部スタイルシートの参照を抽出しました。");
+                            }
+                        }
                     }
                 }
             }
-
-            // headタグ内のlinkタグ（外部スタイルシート）を抽出
-            var linkNodes = doc.DocumentNode.SelectNodes("//head/link[@rel='stylesheet']");
-            if (linkNodes != null)
+            catch (Exception ex)
             {
-                foreach (var linkNode in linkNodes)
-                {
-                    string href = linkNode.GetAttributeValue("href", "");
-                    if (!string.IsNullOrWhiteSpace(href) && !extractedStylesList.Contains(linkNode.OuterHtml))
-                    {
-                        extractedStylesList.Add(linkNode.OuterHtml);
-                        Console.WriteLine("外部スタイルシートの参照を抽出しました。");
-                    }
-                }
+                Console.WriteLine($"スタイル抽出中にエラーが発生しました: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 開始ノードと終了ノードの間のコンテンツを抽出する
+        /// XBRLマークアップを清掃する
         /// </summary>
-        /// <param name="startNode">開始ノード</param>
-        /// <param name="endNode">終了ノード</param>
-        /// <param name="doc">HtmlDocument</param>
-        private void ExtractContentBetweenNodes(HtmlNode startNode, HtmlNode endNode, HtmlDocument doc)
+        /// <param name="html">清掃対象のHTML</param>
+        /// <returns>清掃後のHTML</returns>
+        private string CleanXbrlMarkup(string html)
         {
-            // 修正：テーブル構造とスタイルを保持するために、DOMツリーから直接抽出する方法に変更
-            HtmlDocument extractedDoc = new HtmlDocument();
-            HtmlNode bodyNode = extractedDoc.CreateElement("div");
-            extractedDoc.DocumentNode.AppendChild(bodyNode);
-
-            bool isCapturing = false;
-            
-            // 親ノードを見つける関数
-            HtmlNode FindCommonAncestor(HtmlNode node1, HtmlNode node2)
+            try
             {
-                var ancestors1 = new List<HtmlNode>();
-                var current = node1;
-                while (current != null)
-                {
-                    ancestors1.Add(current);
-                    current = current.ParentNode;
-                }
-
-                current = node2;
-                while (current != null)
-                {
-                    if (ancestors1.Contains(current))
-                    {
-                        return current;
-                    }
-                    current = current.ParentNode;
-                }
-
-                return doc.DocumentNode.SelectSingleNode("//body");
+                // <#text>タグを除去して内容を保持
+                html = Regex.Replace(html, @"<\#text>(.*?)<\/\#text>", "$1", RegexOptions.Singleline);
+                
+                // ix:タグの処理
+                html = Regex.Replace(html, @"<ix:[^>]*>(.*?)<\/ix:[^>]*>", "$1", RegexOptions.Singleline);
+                
+                return html;
             }
-
-            // 共通の親ノードを見つける
-            HtmlNode commonAncestor = FindCommonAncestor(startNode, endNode);
-            Console.WriteLine($"共通の親ノード: {commonAncestor.Name}");
-
-            // 開始ノードから終了ノードまでを抽出する
-            void ProcessNode(HtmlNode node, HtmlNode parentInNewDoc)
+            catch (Exception ex)
             {
-                // 開始ノードに到達
-                if (node == startNode)
-                {
-                    isCapturing = true;
-                }
-
-                // 終了ノードに到達
-                if (node == endNode)
-                {
-                    isCapturing = false;
-                    return;
-                }
-
-                if (isCapturing)
-                {
-                    // ノードをコピーして新しいドキュメントに追加
-                    HtmlNode newNode = extractedDoc.CreateElement(node.Name);
-                    
-                    // 属性をコピー（スタイル情報を保持）
-                    foreach (var attr in node.Attributes)
-                    {
-                        newNode.SetAttributeValue(attr.Name, attr.Value);
-                    }
-
-                    // ノードコンテンツの処理
-                    if (!node.HasChildNodes)
-                    {
-                        newNode.InnerHtml = node.InnerHtml;
-                    }
-
-                    parentInNewDoc.AppendChild(newNode);
-
-                    // 子ノードを再帰的に処理
-                    foreach (var child in node.ChildNodes)
-                    {
-                        ProcessNode(child, newNode);
-                    }
-                }
-                else if (!isCapturing && node != endNode)
-                {
-                    // 子ノードに対して再帰（開始ノードを探すため）
-                    foreach (var child in node.ChildNodes)
-                    {
-                        ProcessNode(child, parentInNewDoc);
-                    }
-                }
+                Console.WriteLine($"XBRL清掃中にエラーが発生しました: {ex.Message}");
+                return html; // エラー時は元のHTMLを返す
             }
-
-            // 処理開始
-            ProcessNode(commonAncestor, bodyNode);
-
-            // 抽出されたコンテンツを追加
-            extractedContentList.Add(bodyNode.InnerHtml);
-            Console.WriteLine($"抽出されたコンテンツのサイズ: {bodyNode.InnerHtml.Length} 文字");
         }
 
         /// <summary>
-        /// 開始ノードから文書の最後までのコンテンツを抽出する
+        /// ノードを再帰的にコピーする (XBRL対応)
         /// </summary>
-        /// <param name="startNode">開始ノード</param>
-        /// <param name="doc">HtmlDocument</param>
-        private void ExtractContentFromStartNode(HtmlNode startNode, HtmlDocument doc)
+        private HtmlNode DeepCopyNode(HtmlNode originalNode, HtmlDocument targetDoc)
         {
-            // 修正：テーブル構造とスタイルを保持するために、DOMツリーから直接抽出する方法に変更
-            HtmlDocument extractedDoc = new HtmlDocument();
-            HtmlNode bodyNode = extractedDoc.CreateElement("div");
-            extractedDoc.DocumentNode.AppendChild(bodyNode);
-
-            bool isCapturing = false;
-
-            // 階層順でコンテンツを収集
-            void ProcessNode(HtmlNode node, HtmlNode parentInNewDoc)
+            try
             {
-                // 開始ノードに到達
-                if (node == startNode)
+                // 空白ノードやコメントノードは無視
+                if (originalNode.NodeType == HtmlNodeType.Comment || 
+                    (originalNode.NodeType == HtmlNodeType.Text && string.IsNullOrWhiteSpace(originalNode.InnerText)))
                 {
-                    isCapturing = true;
+                    return null;
                 }
 
-                if (isCapturing)
+                // テキストノードの場合はXBRLマークアップを除去
+                if (originalNode.NodeType == HtmlNodeType.Text)
                 {
-                    // ノードをコピーして新しいドキュメントに追加
-                    HtmlNode newNode = extractedDoc.CreateElement(node.Name);
-                    
-                    // 属性をコピー（スタイル情報を保持）
-                    foreach (var attr in node.Attributes)
-                    {
-                        newNode.SetAttributeValue(attr.Name, attr.Value);
-                    }
+                    var textNode = targetDoc.CreateTextNode(CleanXbrlMarkup(originalNode.InnerText));
+                    return textNode;
+                }
 
-                    // ノードコンテンツの処理
-                    if (!node.HasChildNodes)
-                    {
-                        newNode.InnerHtml = node.InnerHtml;
-                    }
+                // 要素ノードの場合
+                HtmlNode newNode = targetDoc.CreateElement(originalNode.Name);
+                
+                // 属性をコピー
+                foreach (var attr in originalNode.Attributes)
+                {
+                    newNode.SetAttributeValue(attr.Name, attr.Value);
+                }
 
-                    parentInNewDoc.AppendChild(newNode);
-
-                    // 子ノードを再帰的に処理
-                    foreach (var child in node.ChildNodes)
+                // 子ノードを再帰的にコピー
+                if (originalNode.HasChildNodes)
+                {
+                    foreach (var child in originalNode.ChildNodes)
                     {
-                        ProcessNode(child, newNode);
+                        var copiedChild = DeepCopyNode(child, targetDoc);
+                        if (copiedChild != null)
+                        {
+                            newNode.AppendChild(copiedChild);
+                        }
                     }
                 }
                 else
                 {
-                    // 子ノードに対して再帰（開始ノードを探すため）
-                    foreach (var child in node.ChildNodes)
+                    // 子ノードがない場合、InnerHtmlをクリーンアップして設定
+                    if (!string.IsNullOrEmpty(originalNode.InnerHtml))
                     {
-                        ProcessNode(child, parentInNewDoc);
+                        newNode.InnerHtml = CleanXbrlMarkup(originalNode.InnerHtml);
                     }
                 }
-            }
 
-            // BODYタグ以下の要素を対象に
-            HtmlNode docBodyNode = doc.DocumentNode.SelectSingleNode("//body");
-            if (docBodyNode == null)
+                return newNode;
+            }
+            catch (Exception ex)
             {
-                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
-                return;
+                Console.WriteLine($"ノードコピー中にエラーが発生しました: {ex.Message}");
+                return null;
             }
-
-            // 処理開始
-            ProcessNode(docBodyNode, bodyNode);
-
-            // 抽出されたコンテンツを追加
-            extractedContentList.Add(bodyNode.InnerHtml);
-            Console.WriteLine($"抽出されたコンテンツのサイズ: {bodyNode.InnerHtml.Length} 文字");
         }
 
         /// <summary>
-        /// 文書の先頭から終了ノードまでのコンテンツを抽出する
+        /// 開始ノードと終了ノードの間のコンテンツを抽出する（改善版）
         /// </summary>
-        /// <param name="endNode">終了ノード</param>
-        /// <param name="doc">HtmlDocument</param>
-        private void ExtractContentUntilEndNode(HtmlNode endNode, HtmlDocument doc)
+        private void ExtractContentBetweenNodes(HtmlNode startNode, HtmlNode endNode, HtmlDocument doc)
         {
-            // 修正：テーブル構造とスタイルを保持するために、DOMツリーから直接抽出する方法に変更
-            HtmlDocument extractedDoc = new HtmlDocument();
-            HtmlNode bodyNode = extractedDoc.CreateElement("div");
-            extractedDoc.DocumentNode.AppendChild(bodyNode);
-
-            bool isCapturing = true;
-
-            // 階層順でコンテンツを収集
-            void ProcessNode(HtmlNode node, HtmlNode parentInNewDoc)
+            try
             {
-                // 終了ノードに到達
-                if (node == endNode)
+                // 抽出用のHTML文書を作成
+                HtmlDocument extractedDoc = new HtmlDocument();
+                HtmlNode rootNode = extractedDoc.CreateElement("div");
+                extractedDoc.DocumentNode.AppendChild(rootNode);
+
+                // 開始ノードと終了ノードの共通の親ノードを見つける
+                HtmlNode commonAncestor = FindCommonAncestor(startNode, endNode, doc);
+                if (commonAncestor == null)
                 {
-                    isCapturing = false;
+                    Console.WriteLine("共通の親ノードが見つかりませんでした。");
                     return;
                 }
 
-                if (isCapturing)
+                Console.WriteLine($"共通の親ノード: {commonAncestor.Name}");
+
+                bool isCapturing = false;
+                ProcessNodesBetween(commonAncestor, startNode, endNode, extractedDoc, rootNode, ref isCapturing);
+
+                // 結果を保存
+                string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
+                extractedContentList.Add(extractedHtml);
+                Console.WriteLine($"抽出されたコンテンツのサイズ: {extractedHtml.Length} 文字");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"コンテンツ抽出中にエラーが発生しました: {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// 開始ノードと終了ノードの間のノードを処理する
+        /// </summary>
+        private void ProcessNodesBetween(HtmlNode currentNode, HtmlNode startNode, HtmlNode endNode, 
+                                        HtmlDocument targetDoc, HtmlNode targetParent, ref bool isCapturing)
+        {
+            // 開始ノードに到達
+            if (currentNode == startNode)
+            {
+                isCapturing = true;
+                HtmlNode copiedNode = DeepCopyNode(currentNode, targetDoc);
+                if (copiedNode != null)
                 {
-                    // ノードをコピーして新しいドキュメントに追加
-                    HtmlNode newNode = extractedDoc.CreateElement(node.Name);
-                    
-                    // 属性をコピー（スタイル情報を保持）
-                    foreach (var attr in node.Attributes)
-                    {
-                        newNode.SetAttributeValue(attr.Name, attr.Value);
-                    }
-
-                    // ノードコンテンツの処理
-                    if (!node.HasChildNodes)
-                    {
-                        newNode.InnerHtml = node.InnerHtml;
-                    }
-
-                    parentInNewDoc.AppendChild(newNode);
-
-                    // 子ノードを再帰的に処理
-                    foreach (var child in node.ChildNodes)
-                    {
-                        ProcessNode(child, newNode);
-                    }
+                    targetParent.AppendChild(copiedNode);
                 }
+                return; // 開始ノードの処理は完了
             }
 
-            // BODYタグ以下の要素を対象に
-            HtmlNode docBodyNode = doc.DocumentNode.SelectSingleNode("//body");
-            if (docBodyNode == null)
+            // 終了ノードに到達
+            if (currentNode == endNode)
             {
-                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                isCapturing = false;
+                return; // 終了ノードは含めない
+            }
+
+            // 開始ノードと終了ノードの間のノードを捕捉
+            if (isCapturing)
+            {
+                HtmlNode copiedNode = DeepCopyNode(currentNode, targetDoc);
+                if (copiedNode != null)
+                {
+                    targetParent.AppendChild(copiedNode);
+                }
                 return;
             }
 
-            // 処理開始
-            ProcessNode(docBodyNode, bodyNode);
+            // 子ノードに対して再帰
+            if (currentNode.HasChildNodes)
+            {
+                foreach (var child in currentNode.ChildNodes)
+                {
+                    ProcessNodesBetween(child, startNode, endNode, targetDoc, targetParent, ref isCapturing);
+                    if (!isCapturing && child == endNode)
+                    {
+                        break; // 終了ノードを超えたら処理終了
+                    }
+                }
+            }
+        }
 
-            // 抽出されたコンテンツを追加
-            extractedContentList.Add(bodyNode.InnerHtml);
-            Console.WriteLine($"抽出されたコンテンツのサイズ: {bodyNode.InnerHtml.Length} 文字");
+        /// <summary>
+        /// 2つのノードの共通の先祖を見つける
+        /// </summary>
+        private HtmlNode FindCommonAncestor(HtmlNode node1, HtmlNode node2, HtmlDocument doc)
+        {
+            // ノード1の先祖リストを作成
+            var ancestors1 = new List<HtmlNode>();
+            HtmlNode current = node1;
+            while (current != null)
+            {
+                ancestors1.Add(current);
+                current = current.ParentNode;
+            }
+
+            // ノード2の先祖をたどりながら、ノード1の先祖リストに含まれるか確認
+            current = node2;
+            while (current != null)
+            {
+                if (ancestors1.Contains(current))
+                {
+                    return current;
+                }
+                current = current.ParentNode;
+            }
+
+            // 共通の先祖が見つからない場合はbodyを返す
+            return doc.DocumentNode.SelectSingleNode("//body");
+        }
+
+        /// <summary>
+        /// 開始ノードから文書の最後までのコンテンツを抽出する（改善版）
+        /// </summary>
+        private void ExtractContentFromStartNode(HtmlNode startNode, HtmlDocument doc)
+        {
+            try
+            {
+                // 抽出用のHTML文書を作成
+                HtmlDocument extractedDoc = new HtmlDocument();
+                HtmlNode rootNode = extractedDoc.CreateElement("div");
+                extractedDoc.DocumentNode.AppendChild(rootNode);
+
+                // 開始ノードをコピー
+                HtmlNode copiedStartNode = DeepCopyNode(startNode, extractedDoc);
+                if (copiedStartNode != null)
+                {
+                    rootNode.AppendChild(copiedStartNode);
+                }
+
+                // 開始ノード以降のノードを抽出
+                HtmlNode parent = startNode.ParentNode;
+                bool foundStart = false;
+
+                foreach (var sibling in parent.ChildNodes)
+                {
+                    if (sibling == startNode)
+                    {
+                        foundStart = true;
+                        continue; // 開始ノードは既に追加済み
+                    }
+
+                    if (foundStart)
+                    {
+                        HtmlNode copiedNode = DeepCopyNode(sibling, extractedDoc);
+                        if (copiedNode != null)
+                        {
+                            rootNode.AppendChild(copiedNode);
+                        }
+                    }
+                }
+
+                // 結果を保存
+                string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
+                extractedContentList.Add(extractedHtml);
+                Console.WriteLine($"抽出されたコンテンツのサイズ: {extractedHtml.Length} 文字");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"開始ノードからのコンテンツ抽出中にエラーが発生しました: {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// 文書の先頭から終了ノードまでのコンテンツを抽出する（改善版）
+        /// </summary>
+        private void ExtractContentUntilEndNode(HtmlNode endNode, HtmlDocument doc)
+        {
+            try
+            {
+                // 抽出用のHTML文書を作成
+                HtmlDocument extractedDoc = new HtmlDocument();
+                HtmlNode rootNode = extractedDoc.CreateElement("div");
+                extractedDoc.DocumentNode.AppendChild(rootNode);
+
+                // 文書先頭からendNodeの直前までを抽出
+                HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
+                if (bodyNode == null)
+                {
+                    Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                    return;
+                }
+
+                // 親ノードを取得
+                HtmlNode parent = endNode.ParentNode;
+                
+                // 終了ノードの前のノードを全て抽出
+                bool reachedEnd = false;
+                foreach (var child in parent.ChildNodes)
+                {
+                    if (child == endNode)
+                    {
+                        reachedEnd = true;
+                        break;
+                    }
+
+                    HtmlNode copiedNode = DeepCopyNode(child, extractedDoc);
+                    if (copiedNode != null)
+                    {
+                        rootNode.AppendChild(copiedNode);
+                    }
+                }
+
+                if (!reachedEnd)
+                {
+                    Console.WriteLine("警告: 終了ノードまでの抽出が完了しませんでした。");
+                }
+
+                // 結果を保存
+                string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
+                extractedContentList.Add(extractedHtml);
+                Console.WriteLine($"抽出されたコンテンツのサイズ: {extractedHtml.Length} 文字");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"終了ノードまでのコンテンツ抽出中にエラーが発生しました: {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
+            }
         }
 
         /// <summary>
         /// ファイル全体を抽出する（抽出中のファイルで終了見出しがない場合）
         /// </summary>
-        /// <param name="doc">HtmlDocument</param>
         private void ExtractEntireFile(HtmlDocument doc)
         {
-            // 修正：テーブル構造とスタイルを保持するために、DOMツリーから直接抽出する方法に変更
-            HtmlDocument extractedDoc = new HtmlDocument();
-            HtmlNode bodyNode = extractedDoc.CreateElement("div");
-            extractedDoc.DocumentNode.AppendChild(bodyNode);
-
-            // BODYタグ以下の要素を対象に
-            HtmlNode docBodyNode = doc.DocumentNode.SelectSingleNode("//body");
-            if (docBodyNode == null)
+            try
             {
-                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
-                return;
-            }
+                // 抽出用のHTML文書を作成
+                HtmlDocument extractedDoc = new HtmlDocument();
+                HtmlNode rootNode = extractedDoc.CreateElement("div");
+                extractedDoc.DocumentNode.AppendChild(rootNode);
 
-            // 全てのノードを新しいドキュメントにコピー
-            foreach (var node in docBodyNode.ChildNodes)
+                // BODYタグ以下の要素を対象に
+                HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
+                if (bodyNode == null)
+                {
+                    Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                    return;
+                }
+
+                // 全てのノードをコピー
+                foreach (var node in bodyNode.ChildNodes)
+                {
+                    HtmlNode copiedNode = DeepCopyNode(node, extractedDoc);
+                    if (copiedNode != null)
+                    {
+                        rootNode.AppendChild(copiedNode);
+                    }
+                }
+
+                // 結果を保存
+                string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
+                extractedContentList.Add(extractedHtml);
+                Console.WriteLine($"抽出されたコンテンツのサイズ: {extractedHtml.Length} 文字");
+            }
+            catch (Exception ex)
             {
-                // ノードをコピー
-                HtmlNode newNode = node.CloneNode(true);
-                bodyNode.AppendChild(newNode);
+                Console.WriteLine($"ファイル全体の抽出中にエラーが発生しました: {ex.Message}");
+                Console.WriteLine($"スタックトレース: {ex.StackTrace}");
             }
-
-            // 抽出されたコンテンツを追加
-            extractedContentList.Add(bodyNode.InnerHtml);
-            Console.WriteLine($"抽出されたコンテンツのサイズ: {bodyNode.InnerHtml.Length} 文字");
         }
 
         /// <summary>
@@ -529,7 +651,7 @@ namespace EDINETHtmlExtractor
         /// <param name="contentList">抽出したHTML内容のリスト</param>
         /// <param name="stylesList">抽出したスタイル情報のリスト</param>
         /// <param name="filePath">保存先ファイルパス</param>
-        private void SaveToFile(List<string> contentList, List<string> stylesList, string filePath)
+        private void SaveToFile(List<string> contentList, HashSet<string> stylesList, string filePath)
         {
             // ディレクトリが存在しない場合は作成
             string directory = Path.GetDirectoryName(filePath);
@@ -547,17 +669,19 @@ namespace EDINETHtmlExtractor
             sb.AppendLine("<title>抽出された損益計算書</title>");
             
             // 抽出したスタイル情報をすべて追加
+            sb.AppendLine("<style>");
             foreach (var style in stylesList)
             {
                 sb.AppendLine(style);
             }
             
             // デフォルトのスタイルも追加
-            sb.AppendLine("<style>");
-            sb.AppendLine("body { font-family: Arial, sans-serif; margin: 20px; }");
-            sb.AppendLine("table { border-collapse: collapse; width: 100%; }");
+            sb.AppendLine("body { font-family: 'ＭＳ 明朝', serif; margin: 20px; }");
+            sb.AppendLine("table { border-collapse: collapse; width: auto; margin-bottom: 20px; }");
             sb.AppendLine("th, td { border: 1px solid #ddd; padding: 8px; }");
-            sb.AppendLine("tr:nth-child(even) { background-color: #f2f2f2; }");
+            sb.AppendLine("tr:nth-child(even) { background-color: #f9f9f9; }");
+            sb.AppendLine("tr[style*=\"background-color\"] { background-color: inherit !important; }");
+            
             sb.AppendLine("</style>");
             
             sb.AppendLine("</head>");
@@ -590,7 +714,7 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
-                extractedStylesList.Clear(); // スタイルリストもクリア
+                extractedStylesList.Clear();
 
                 // HTMLファイルを処理
                 ProcessHtmlFile(htmlFilePath);
@@ -624,6 +748,7 @@ namespace EDINETHtmlExtractor
         static void Main(string[] args)
         {
             Console.WriteLine("EDINETの有価証券報告書HTMLセクション抽出ツール");
+            Console.WriteLine($"Version: 1.1.0 (styleKeepBranch)");
             
             string path;
             string outputFilePath;
