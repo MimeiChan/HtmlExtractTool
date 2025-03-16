@@ -134,7 +134,7 @@ namespace EDINETHtmlExtractor
                 {
                     Console.WriteLine("同一ファイル内に開始見出しと終了見出しの両方が見つかりました。");
                     extractionStarted = true;
-                    ExtractFromStartNode(startNode, endNode, doc);
+                    ExtractContentBetweenNodes(startNode, endNode, doc);
                     extractionCompleted = true;  // このファイルで抽出完了とマーク
                 }
                 // ファイル内に開始見出しのみがある場合
@@ -142,13 +142,13 @@ namespace EDINETHtmlExtractor
                 {
                     Console.WriteLine("開始見出しが見つかりました。");
                     extractionStarted = true;
-                    ExtractFromStartNode(startNode, null, doc);
+                    ExtractContentFromStartNode(startNode, doc);
                 }
                 // 既に抽出が始まっていて、このファイルに終了見出しがある場合
                 else if (extractionStarted && endNode != null && !extractionCompleted)
                 {
                     Console.WriteLine("終了見出しが見つかりました。");
-                    ExtractUntilEndNode(endNode, doc);
+                    ExtractContentUntilEndNode(endNode, doc);
                     extractionCompleted = true;
                 }
                 // 既に抽出が始まっていて、このファイルに終了見出しがない場合
@@ -166,83 +166,198 @@ namespace EDINETHtmlExtractor
         }
 
         /// <summary>
-        /// 開始ノードから抽出を開始する
+        /// 開始ノードと終了ノードの間のコンテンツを抽出する
         /// </summary>
         /// <param name="startNode">開始ノード</param>
-        /// <param name="endNode">終了ノード（同じファイル内にある場合）</param>
+        /// <param name="endNode">終了ノード</param>
         /// <param name="doc">HtmlDocument</param>
-        private void ExtractFromStartNode(HtmlNode startNode, HtmlNode endNode, HtmlDocument doc)
+        private void ExtractContentBetweenNodes(HtmlNode startNode, HtmlNode endNode, HtmlDocument doc)
         {
-            HtmlNode currentNode = startNode;
             StringBuilder sb = new StringBuilder();
 
-            // 開始ノード自体を追加
-            sb.AppendLine(currentNode.OuterHtml);
-
-            // 同じファイル内に終了ノードがある場合
-            if (endNode != null)
+            // BODYタグ以下の要素を対象に
+            HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
+            if (bodyNode == null)
             {
-                while ((currentNode = currentNode.NextSibling) != null)
-                {
-                    if (currentNode == endNode)
-                        break;
-                    sb.AppendLine(currentNode.OuterHtml);
-                }
-                extractionCompleted = true;
+                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                return;
             }
-            // 同じファイル内に終了ノードがない場合
-            else
+
+            // 開始ノードと終了ノードのXPathを取得
+            string startXPath = startNode.XPath;
+            string endXPath = endNode.XPath;
+
+            Console.WriteLine($"開始ノードXPath: {startXPath}");
+            Console.WriteLine($"終了ノードXPath: {endXPath}");
+
+            bool isCapturing = false;
+            bool hasAddedStartNode = false;
+
+            // 階層順でコンテンツを収集
+            void TraverseAndCapture(HtmlNode node)
             {
-                while ((currentNode = currentNode.NextSibling) != null)
+                // 開始ノードに到達
+                if (node == startNode)
                 {
-                    sb.AppendLine(currentNode.OuterHtml);
+                    isCapturing = true;
+                    sb.AppendLine(node.OuterHtml);
+                    hasAddedStartNode = true;
+                    return; // 開始ノードの子ノードは開始ノードのOuterHtmlに含まれるので再帰しない
                 }
+
+                // 終了ノードに到達
+                if (node == endNode)
+                {
+                    isCapturing = false;
+                    return; // 終了ノードは含めない
+                }
+
+                // 開始ノードと終了ノードの間のノードを捕捉
+                if (isCapturing && node != startNode)
+                {
+                    // 子ノードを持たない場合のみHTML追加
+                    if (!node.HasChildNodes)
+                    {
+                        sb.AppendLine(node.OuterHtml);
+                    }
+                }
+
+                // 子ノードに対して再帰
+                foreach (var child in node.ChildNodes)
+                {
+                    TraverseAndCapture(child);
+                }
+            }
+
+            // 探索開始
+            TraverseAndCapture(bodyNode);
+
+            // 開始ノードが追加されていなかった場合、明示的に追加
+            if (!hasAddedStartNode)
+            {
+                sb.Insert(0, startNode.OuterHtml + Environment.NewLine);
             }
 
             extractedContentList.Add(sb.ToString());
+            Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
         }
 
         /// <summary>
-        /// 終了ノードまでの内容を抽出する
+        /// 開始ノードから文書の最後までのコンテンツを抽出する
+        /// </summary>
+        /// <param name="startNode">開始ノード</param>
+        /// <param name="doc">HtmlDocument</param>
+        private void ExtractContentFromStartNode(HtmlNode startNode, HtmlDocument doc)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            // BODYタグ以下の要素を対象に
+            HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
+            if (bodyNode == null)
+            {
+                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                return;
+            }
+
+            bool isCapturing = false;
+            bool hasAddedStartNode = false;
+
+            // 階層順でコンテンツを収集
+            void TraverseAndCapture(HtmlNode node)
+            {
+                // 開始ノードに到達
+                if (node == startNode)
+                {
+                    isCapturing = true;
+                    sb.AppendLine(node.OuterHtml);
+                    hasAddedStartNode = true;
+                    return; // 開始ノードの子ノードは開始ノードのOuterHtmlに含まれるので再帰しない
+                }
+
+                // 開始ノード以降のノードを捕捉
+                if (isCapturing)
+                {
+                    // 子ノードを持たない場合のみHTML追加
+                    if (!node.HasChildNodes)
+                    {
+                        sb.AppendLine(node.OuterHtml);
+                    }
+                }
+
+                // 子ノードに対して再帰
+                foreach (var child in node.ChildNodes)
+                {
+                    TraverseAndCapture(child);
+                }
+            }
+
+            // 探索開始
+            TraverseAndCapture(bodyNode);
+
+            // 開始ノードが追加されていなかった場合、明示的に追加
+            if (!hasAddedStartNode)
+            {
+                sb.Insert(0, startNode.OuterHtml + Environment.NewLine);
+            }
+
+            extractedContentList.Add(sb.ToString());
+            Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
+        }
+
+        /// <summary>
+        /// 文書の先頭から終了ノードまでのコンテンツを抽出する
         /// </summary>
         /// <param name="endNode">終了ノード</param>
         /// <param name="doc">HtmlDocument</param>
-        private void ExtractUntilEndNode(HtmlNode endNode, HtmlDocument doc)
+        private void ExtractContentUntilEndNode(HtmlNode endNode, HtmlDocument doc)
         {
             StringBuilder sb = new StringBuilder();
+
+            // BODYタグ以下の要素を対象に
             HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
-            if (bodyNode == null) return;
-
-            // body以下の全ノードを取得
-            var allNodes = bodyNode.ChildNodes.ToList();
-            int endNodeIndex = allNodes.IndexOf(endNode);
-
-            // 終了ノードが見つからない場合
-            if (endNodeIndex == -1)
+            if (bodyNode == null)
             {
-                // bodyの最初の子ノードから順に処理して、終了ノードを探す
-                for (int i = 0; i < allNodes.Count; i++)
+                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                return;
+            }
+
+            bool isCapturing = true;
+
+            // 階層順でコンテンツを収集
+            void TraverseAndCapture(HtmlNode node)
+            {
+                // 終了ノードに到達
+                if (node == endNode)
                 {
-                    var node = allNodes[i];
-                    if (node.InnerText.Contains(END_SECTION_TITLE))
+                    isCapturing = false;
+                    return; // 終了ノードは含めない
+                }
+
+                // 終了ノードまでのノードを捕捉
+                if (isCapturing)
+                {
+                    // 子ノードを持たない場合のみHTML追加
+                    if (!node.HasChildNodes)
                     {
-                        endNodeIndex = i;
-                        break;
+                        sb.AppendLine(node.OuterHtml);
+                    }
+                }
+
+                // 子ノードに対して再帰（捕捉中のみ）
+                if (isCapturing)
+                {
+                    foreach (var child in node.ChildNodes)
+                    {
+                        TraverseAndCapture(child);
                     }
                 }
             }
 
-            // 終了ノードが見つかった場合
-            if (endNodeIndex > 0)
-            {
-                // 開始から終了ノードの前までを抽出
-                for (int i = 0; i < endNodeIndex; i++)
-                {
-                    sb.AppendLine(allNodes[i].OuterHtml);
-                }
-            }
+            // 探索開始
+            TraverseAndCapture(bodyNode);
 
             extractedContentList.Add(sb.ToString());
+            Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
         }
 
         /// <summary>
@@ -253,7 +368,11 @@ namespace EDINETHtmlExtractor
         {
             StringBuilder sb = new StringBuilder();
             HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
-            if (bodyNode == null) return;
+            if (bodyNode == null)
+            {
+                Console.WriteLine("警告: bodyタグが見つかりませんでした。");
+                return;
+            }
 
             foreach (var node in bodyNode.ChildNodes)
             {
@@ -261,6 +380,7 @@ namespace EDINETHtmlExtractor
             }
 
             extractedContentList.Add(sb.ToString());
+            Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
         }
 
         /// <summary>
