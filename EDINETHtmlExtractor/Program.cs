@@ -16,12 +16,15 @@ namespace EDINETHtmlExtractor
         // 抽出対象の開始見出し
         private const string START_SECTION_TITLE = "【損益計算書】";
         // 抽出対象の終了見出し
-        private const string END_SECTION_TITLE = "【資本変動計算書】";
+        private const string END_SECTION_TITLE = "【株主資本等変動計算書】";
 
         // 抽出状態を管理する変数
         private bool extractionStarted = false;
         private bool extractionCompleted = false;
         private List<string> extractedContentList = new List<string>();
+
+        // 最初に損益計算書が見つかったHTMLの<head>内容を保持するフィールド
+        private string headContent = null;
 
         /// <summary>
         /// ディレクトリ内のHTMLファイルから指定されたセクションを抽出する
@@ -41,7 +44,7 @@ namespace EDINETHtmlExtractor
                 }
 
                 // ディレクトリ内のHTMLファイルを取得して連番順にソート
-                List<string> htmlFiles = GetSortedHtmlFiles(directoryPath);
+                List<string> htmlFiles = Directory.GetFiles(directoryPath, "*.htm").ToList();
                 if (htmlFiles.Count == 0)
                 {
                     Console.WriteLine("指定されたディレクトリにHTMLファイルが見つかりませんでした。");
@@ -52,6 +55,7 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
+                headContent = null;
 
                 // 各ファイルを順番に処理
                 foreach (string htmlFile in htmlFiles)
@@ -74,7 +78,7 @@ namespace EDINETHtmlExtractor
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, headContent);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
@@ -110,7 +114,7 @@ namespace EDINETHtmlExtractor
                 HtmlNode startNode = null;
                 HtmlNode endNode = null;
 
-                // 見出しの検索 - 修正：常に終了見出しを検索するように変更
+                // 見出しの検索 - 常に終了見出しを検索するように変更
                 foreach (var tag in headingTags)
                 {
                     var nodes = doc.DocumentNode.SelectNodes($"//{tag}");
@@ -134,6 +138,11 @@ namespace EDINETHtmlExtractor
                 {
                     Console.WriteLine("同一ファイル内に開始見出しと終了見出しの両方が見つかりました。");
                     extractionStarted = true;
+                    // 最初に損益計算書が見つかったファイルの<head>を取得
+                    if (headContent == null)
+                    {
+                        headContent = ExtractHeadContent(doc);
+                    }
                     ExtractContentBetweenNodes(startNode, endNode, doc);
                     extractionCompleted = true;  // このファイルで抽出完了とマーク
                 }
@@ -142,6 +151,11 @@ namespace EDINETHtmlExtractor
                 {
                     Console.WriteLine("開始見出しが見つかりました。");
                     extractionStarted = true;
+                    // 最初に損益計算書が見つかったファイルの<head>を取得
+                    if (headContent == null)
+                    {
+                        headContent = ExtractHeadContent(doc);
+                    }
                     ExtractContentFromStartNode(startNode, doc);
                 }
                 // 既に抽出が始まっていて、このファイルに終了見出しがある場合
@@ -163,6 +177,17 @@ namespace EDINETHtmlExtractor
             {
                 Console.WriteLine($"ファイル処理中にエラーが発生しました: {htmlFilePath}, {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 指定したHtmlDocumentから<head>の内容を抽出する
+        /// </summary>
+        /// <param name="doc">HtmlDocument</param>
+        /// <returns>headタグ内のHTML</returns>
+        private string ExtractHeadContent(HtmlDocument doc)
+        {
+            var headNode = doc.DocumentNode.SelectSingleNode("//head");
+            return headNode != null ? headNode.InnerHtml : "";
         }
 
         /// <summary>
@@ -391,13 +416,13 @@ namespace EDINETHtmlExtractor
         private List<string> GetSortedHtmlFiles(string directoryPath)
         {
             string[] files = Directory.GetFiles(directoryPath, "*.html");
-            
+
             // 連番でソート（01_html, 02_html, ...の形式を想定）
             var sortedFiles = files
-                .Select(f => new 
-                { 
+                .Select(f => new
+                {
                     FilePath = f,
-                    SortKey = GetSortKey(Path.GetFileName(f)) 
+                    SortKey = GetSortKey(Path.GetFileName(f))
                 })
                 .OrderBy(f => f.SortKey)
                 .Select(f => f.FilePath)
@@ -427,7 +452,8 @@ namespace EDINETHtmlExtractor
         /// </summary>
         /// <param name="contentList">抽出したHTML内容のリスト</param>
         /// <param name="filePath">保存先ファイルパス</param>
-        private void SaveToFile(List<string> contentList, string filePath)
+        /// <param name="headContent">出力HTMLの<head>に追加する内容</param>
+        private void SaveToFile(List<string> contentList, string filePath, string headContent)
         {
             // ディレクトリが存在しない場合は作成
             string directory = Path.GetDirectoryName(filePath);
@@ -443,9 +469,11 @@ namespace EDINETHtmlExtractor
             sb.AppendLine("<head>");
             sb.AppendLine("<meta charset=\"UTF-8\">");
             sb.AppendLine("<title>抽出された損益計算書</title>");
-            sb.AppendLine("<style>");
-            sb.AppendLine("body { font-family: Arial, sans-serif; margin: 20px; }");
-            sb.AppendLine("</style>");
+            // headContentがあれば追加
+            if (!string.IsNullOrEmpty(headContent))
+            {
+                sb.AppendLine(headContent);
+            }
             sb.AppendLine("</head>");
             sb.AppendLine("<body>");
 
@@ -476,6 +504,7 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
+                headContent = null;
 
                 // HTMLファイルを処理
                 ProcessHtmlFile(htmlFilePath);
@@ -483,7 +512,7 @@ namespace EDINETHtmlExtractor
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, headContent);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
@@ -509,7 +538,7 @@ namespace EDINETHtmlExtractor
         static void Main(string[] args)
         {
             Console.WriteLine("EDINETの有価証券報告書HTMLセクション抽出ツール");
-            
+
             string path;
             string outputFilePath;
             bool isDirectory;
