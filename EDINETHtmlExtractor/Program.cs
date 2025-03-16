@@ -15,7 +15,7 @@ namespace EDINETHtmlExtractor
     {
         // 抽出対象の開始見出し
         private const string START_SECTION_TITLE = "【損益計算書】";
-        // 抽出対象の終了見出し - 変更
+        // 抽出対象の終了見出し
         private const string END_SECTION_TITLE = "【株主資本等変動計算書】";
 
         // 抽出状態を管理する変数
@@ -25,6 +25,17 @@ namespace EDINETHtmlExtractor
         
         // スタイル情報を保持する変数
         private HashSet<string> extractedStylesList = new HashSet<string>();
+        
+        // デバッグモード
+        private bool debugMode = false;
+
+        /// <summary>
+        /// デバッグモードを設定する
+        /// </summary>
+        public void SetDebugMode(bool enabled)
+        {
+            debugMode = enabled;
+        }
 
         /// <summary>
         /// ディレクトリ内のHTMLファイルから指定されたセクションを抽出する
@@ -133,7 +144,12 @@ namespace EDINETHtmlExtractor
                         startNode = nodes.FirstOrDefault(n => n.InnerText.Contains(START_SECTION_TITLE));
                         if (startNode != null)
                         {
-                            Console.WriteLine($"開始見出しが見つかりました: {startNode.InnerText}");
+                            Console.WriteLine($"開始見出しが見つかりました: {startNode.InnerText.Trim()}");
+                            if (debugMode)
+                            {
+                                Console.WriteLine($"開始ノードのXPath: {startNode.XPath}");
+                                Console.WriteLine($"開始ノードのOuterHtml: {startNode.OuterHtml}");
+                            }
                         }
                     }
 
@@ -143,7 +159,12 @@ namespace EDINETHtmlExtractor
                         endNode = nodes.FirstOrDefault(n => n.InnerText.Contains(END_SECTION_TITLE));
                         if (endNode != null)
                         {
-                            Console.WriteLine($"終了見出しが見つかりました: {endNode.InnerText}");
+                            Console.WriteLine($"終了見出しが見つかりました: {endNode.InnerText.Trim()}");
+                            if (debugMode)
+                            {
+                                Console.WriteLine($"終了ノードのXPath: {endNode.XPath}");
+                                Console.WriteLine($"終了ノードのOuterHtml: {endNode.OuterHtml}");
+                            }
                         }
                     }
                 }
@@ -203,7 +224,7 @@ namespace EDINETHtmlExtractor
                             !extractedStylesList.Contains(styleContent))
                         {
                             extractedStylesList.Add(styleContent);
-                            Console.WriteLine("スタイル情報を抽出しました。");
+                            if (debugMode) Console.WriteLine("スタイル情報を抽出しました。");
                         }
                     }
                 }
@@ -224,7 +245,7 @@ namespace EDINETHtmlExtractor
                             !extractedStylesList.Contains(cssRule))
                         {
                             extractedStylesList.Add(cssRule);
-                            Console.WriteLine("インラインCSSルールを抽出しました。");
+                            if (debugMode) Console.WriteLine("インラインCSSルールを抽出しました。");
                         }
                     }
                 }
@@ -242,7 +263,7 @@ namespace EDINETHtmlExtractor
                             if (!extractedStylesList.Contains(linkOuterHtml))
                             {
                                 extractedStylesList.Add(linkOuterHtml);
-                                Console.WriteLine("外部スタイルシートの参照を抽出しました。");
+                                if (debugMode) Console.WriteLine("外部スタイルシートの参照を抽出しました。");
                             }
                         }
                     }
@@ -263,6 +284,8 @@ namespace EDINETHtmlExtractor
         {
             try
             {
+                if (string.IsNullOrEmpty(html)) return html;
+
                 // <#text>タグを除去して内容を保持
                 html = Regex.Replace(html, @"<\#text>(.*?)<\/\#text>", "$1", RegexOptions.Singleline);
                 
@@ -360,9 +383,46 @@ namespace EDINETHtmlExtractor
 
                 Console.WriteLine($"共通の親ノード: {commonAncestor.Name}");
 
+                // 各子ノードを処理
                 bool isCapturing = false;
-                ProcessNodesBetween(commonAncestor, startNode, endNode, extractedDoc, rootNode, ref isCapturing);
+                bool endNodeFound = false;
+                
+                // startNodeからendNodeの前までを抽出
+                HtmlNodeCollection targetNodes = commonAncestor.ChildNodes;
+                foreach (var node in targetNodes)
+                {
+                    // 終了ノードに到達したらフラグを立てて終了
+                    if (IsNodeOrDescendant(node, endNode))
+                    {
+                        endNodeFound = true;
+                        if (debugMode) Console.WriteLine("終了ノードに到達したため抽出を終了します。");
+                        break;
+                    }
+                    
+                    // 開始ノードまたはその子孫なら抽出開始
+                    if (!isCapturing && IsNodeOrDescendant(node, startNode))
+                    {
+                        isCapturing = true;
+                        if (debugMode) Console.WriteLine("開始ノードに到達したため抽出を開始します。");
+                    }
+                    
+                    // 抽出する場合はノードをコピー
+                    if (isCapturing)
+                    {
+                        HtmlNode copiedNode = DeepCopyNode(node, extractedDoc);
+                        if (copiedNode != null)
+                        {
+                            rootNode.AppendChild(copiedNode);
+                            if (debugMode) Console.WriteLine($"ノードをコピーしました: {node.Name}");
+                        }
+                    }
+                }
 
+                if (!endNodeFound)
+                {
+                    Console.WriteLine("警告: 終了ノードが見つかりませんでした。抽出は不完全かもしれません。");
+                }
+                
                 // 結果を保存
                 string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
                 extractedContentList.Add(extractedHtml);
@@ -376,82 +436,16 @@ namespace EDINETHtmlExtractor
         }
 
         /// <summary>
-        /// 開始ノードと終了ノードの間のノードを処理する
+        /// ノードが指定されたターゲットノードまたはその子孫かどうかを確認
         /// </summary>
-        private void ProcessNodesBetween(HtmlNode currentNode, HtmlNode startNode, HtmlNode endNode, 
-                                        HtmlDocument targetDoc, HtmlNode targetParent, ref bool isCapturing)
+        private bool IsNodeOrDescendant(HtmlNode node, HtmlNode targetNode)
         {
-            // 開始ノードに到達
-            if (currentNode == startNode)
-            {
-                isCapturing = true;
-                HtmlNode copiedNode = DeepCopyNode(currentNode, targetDoc);
-                if (copiedNode != null)
-                {
-                    targetParent.AppendChild(copiedNode);
-                }
-                return; // 開始ノードの処理は完了
-            }
-
-            // 終了ノードに到達
-            if (currentNode == endNode)
-            {
-                isCapturing = false;
-                return; // 終了ノードは含めない
-            }
-
-            // 開始ノードと終了ノードの間のノードを捕捉
-            if (isCapturing)
-            {
-                HtmlNode copiedNode = DeepCopyNode(currentNode, targetDoc);
-                if (copiedNode != null)
-                {
-                    targetParent.AppendChild(copiedNode);
-                }
-                return;
-            }
-
-            // 子ノードに対して再帰
-            if (currentNode.HasChildNodes)
-            {
-                foreach (var child in currentNode.ChildNodes)
-                {
-                    ProcessNodesBetween(child, startNode, endNode, targetDoc, targetParent, ref isCapturing);
-                    if (!isCapturing && child == endNode)
-                    {
-                        break; // 終了ノードを超えたら処理終了
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// 2つのノードの共通の先祖を見つける
-        /// </summary>
-        private HtmlNode FindCommonAncestor(HtmlNode node1, HtmlNode node2, HtmlDocument doc)
-        {
-            // ノード1の先祖リストを作成
-            var ancestors1 = new List<HtmlNode>();
-            HtmlNode current = node1;
-            while (current != null)
-            {
-                ancestors1.Add(current);
-                current = current.ParentNode;
-            }
-
-            // ノード2の先祖をたどりながら、ノード1の先祖リストに含まれるか確認
-            current = node2;
-            while (current != null)
-            {
-                if (ancestors1.Contains(current))
-                {
-                    return current;
-                }
-                current = current.ParentNode;
-            }
-
-            // 共通の先祖が見つからない場合はbodyを返す
-            return doc.DocumentNode.SelectSingleNode("//body");
+            if (node == targetNode) return true;
+            
+            // 子孫ノードを再帰的に確認
+            if (targetNode.XPath.StartsWith(node.XPath)) return true;
+            
+            return false;
         }
 
         /// <summary>
@@ -527,30 +521,12 @@ namespace EDINETHtmlExtractor
                     return;
                 }
 
-                // 親ノードを取得
-                HtmlNode parent = endNode.ParentNode;
-                
-                // 終了ノードの前のノードを全て抽出
-                bool reachedEnd = false;
-                foreach (var child in parent.ChildNodes)
-                {
-                    if (child == endNode)
-                    {
-                        reachedEnd = true;
-                        break;
-                    }
+                // 終了ノードのXPathを取得して親子関係を調べる
+                string endNodeXPath = endNode.XPath;
+                if (debugMode) Console.WriteLine($"終了ノードXPath: {endNodeXPath}");
 
-                    HtmlNode copiedNode = DeepCopyNode(child, extractedDoc);
-                    if (copiedNode != null)
-                    {
-                        rootNode.AppendChild(copiedNode);
-                    }
-                }
-
-                if (!reachedEnd)
-                {
-                    Console.WriteLine("警告: 終了ノードまでの抽出が完了しませんでした。");
-                }
+                // 親子関係をフラットにして処理
+                ExtractNodesUntilEnd(bodyNode, endNode, extractedDoc, rootNode);
 
                 // 結果を保存
                 string extractedHtml = CleanXbrlMarkup(rootNode.InnerHtml);
@@ -562,6 +538,48 @@ namespace EDINETHtmlExtractor
                 Console.WriteLine($"終了ノードまでのコンテンツ抽出中にエラーが発生しました: {ex.Message}");
                 Console.WriteLine($"スタックトレース: {ex.StackTrace}");
             }
+        }
+
+        /// <summary>
+        /// 終了ノードまでの全ノードを抽出する再帰メソッド
+        /// </summary>
+        private bool ExtractNodesUntilEnd(HtmlNode currentNode, HtmlNode endNode, HtmlDocument targetDoc, HtmlNode targetParent)
+        {
+            // 現在のノードが終了ノードかその親かを確認
+            if (currentNode == endNode)
+            {
+                if (debugMode) Console.WriteLine($"終了ノード {endNode.Name} に到達しました。抽出を停止します。");
+                return true; // 終了ノードに到達
+            }
+
+            // 終了ノードを含むか子孫として持つかをチェック
+            bool containsEndNode = false;
+
+            if (currentNode.HasChildNodes)
+            {
+                foreach (var child in currentNode.ChildNodes)
+                {
+                    if (ExtractNodesUntilEnd(child, endNode, targetDoc, targetParent))
+                    {
+                        containsEndNode = true;
+                        break;
+                    }
+                }
+            }
+
+            // 終了ノードを含まない場合のみコピーする
+            if (!containsEndNode && currentNode != endNode)
+            {
+                // ノードをコピー
+                HtmlNode copiedNode = DeepCopyNode(currentNode, targetDoc);
+                if (copiedNode != null)
+                {
+                    targetParent.AppendChild(copiedNode);
+                    if (debugMode) Console.WriteLine($"ノード {currentNode.Name} をコピーしました。");
+                }
+            }
+
+            return containsEndNode;
         }
 
         /// <summary>
@@ -604,6 +622,35 @@ namespace EDINETHtmlExtractor
                 Console.WriteLine($"ファイル全体の抽出中にエラーが発生しました: {ex.Message}");
                 Console.WriteLine($"スタックトレース: {ex.StackTrace}");
             }
+        }
+
+        /// <summary>
+        /// 2つのノードの共通の先祖を見つける
+        /// </summary>
+        private HtmlNode FindCommonAncestor(HtmlNode node1, HtmlNode node2, HtmlDocument doc)
+        {
+            // ノード1の先祖リストを作成
+            var ancestors1 = new List<HtmlNode>();
+            HtmlNode current = node1;
+            while (current != null)
+            {
+                ancestors1.Add(current);
+                current = current.ParentNode;
+            }
+
+            // ノード2の先祖をたどりながら、ノード1の先祖リストに含まれるか確認
+            current = node2;
+            while (current != null)
+            {
+                if (ancestors1.Contains(current))
+                {
+                    return current;
+                }
+                current = current.ParentNode;
+            }
+
+            // 共通の先祖が見つからない場合はbodyを返す
+            return doc.DocumentNode.SelectSingleNode("//body");
         }
 
         /// <summary>
@@ -748,11 +795,21 @@ namespace EDINETHtmlExtractor
         static void Main(string[] args)
         {
             Console.WriteLine("EDINETの有価証券報告書HTMLセクション抽出ツール");
-            Console.WriteLine($"Version: 1.1.0 (styleKeepBranch)");
+            Console.WriteLine($"Version: 1.2.0 (styleKeepBranch)");
             
             string path;
             string outputFilePath;
             bool isDirectory;
+            bool debugMode = false;
+
+            // デバッグモードの確認
+            if (args.Contains("-debug"))
+            {
+                debugMode = true;
+                Console.WriteLine("デバッグモードが有効になりました。");
+                // デバッグ引数を除去
+                args = args.Where(a => a != "-debug").ToArray();
+            }
 
             if (args.Length >= 2)
             {
@@ -801,6 +858,7 @@ namespace EDINETHtmlExtractor
 
             // セクション抽出実行
             HtmlSectionExtractor extractor = new HtmlSectionExtractor();
+            extractor.SetDebugMode(debugMode);
             bool success;
 
             if (isDirectory)
