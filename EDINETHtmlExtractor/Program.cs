@@ -53,6 +53,9 @@ namespace EDINETHtmlExtractor
                 extractionCompleted = false;
                 extractedContentList.Clear();
 
+                // CSSスタイルを抽出（最初のファイルから）
+                string styles = ExtractStyles(htmlFiles[0]);
+
                 // 各ファイルを順番に処理
                 foreach (string htmlFile in htmlFiles)
                 {
@@ -74,7 +77,7 @@ namespace EDINETHtmlExtractor
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, styles);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
@@ -88,6 +91,49 @@ namespace EDINETHtmlExtractor
             {
                 Console.WriteLine($"エラーが発生しました: {ex.Message}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// HTMLファイルからスタイル情報を抽出する
+        /// </summary>
+        /// <param name="htmlFilePath">HTMLファイルのパス</param>
+        /// <returns>抽出されたスタイル情報</returns>
+        private string ExtractStyles(string htmlFilePath)
+        {
+            try
+            {
+                HtmlDocument doc = new HtmlDocument();
+                doc.Load(htmlFilePath, Encoding.UTF8);
+
+                StringBuilder styles = new StringBuilder();
+
+                // スタイルシートのリンクを抽出
+                var linkNodes = doc.DocumentNode.SelectNodes("//head/link[@rel='stylesheet']");
+                if (linkNodes != null)
+                {
+                    foreach (var link in linkNodes)
+                    {
+                        styles.AppendLine(link.OuterHtml);
+                    }
+                }
+
+                // インラインスタイルを抽出
+                var styleNodes = doc.DocumentNode.SelectNodes("//head/style");
+                if (styleNodes != null)
+                {
+                    foreach (var style in styleNodes)
+                    {
+                        styles.AppendLine(style.OuterHtml);
+                    }
+                }
+
+                return styles.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"スタイル情報の抽出中にエラーが発生しました: {ex.Message}");
+                return string.Empty;
             }
         }
 
@@ -166,6 +212,33 @@ namespace EDINETHtmlExtractor
         }
 
         /// <summary>
+        /// コンテンツブロックを抽出するための親要素を取得
+        /// </summary>
+        /// <param name="node">対象ノード</param>
+        /// <returns>抽出するコンテンツを含む親要素</returns>
+        private HtmlNode FindContentContainer(HtmlNode node)
+        {
+            // 見出しの直接の親要素を取得
+            HtmlNode parent = node.ParentNode;
+            
+            // セクションを含む可能性が高い親要素を探す
+            // article, section, div.content などが候補
+            while (parent != null && parent.Name != "body")
+            {
+                if (parent.Name == "article" || parent.Name == "section" ||
+                   (parent.Name == "div" && 
+                   (parent.GetAttributeValue("class", "").Contains("content") || 
+                    parent.GetAttributeValue("class", "").Contains("main"))))
+                {
+                    return parent;
+                }
+                parent = parent.ParentNode;
+            }
+            
+            return node.ParentNode; // 適切なコンテナが見つからない場合は直接の親を返す
+        }
+
+        /// <summary>
         /// 開始ノードと終了ノードの間のコンテンツを抽出する
         /// </summary>
         /// <param name="startNode">開始ノード</param>
@@ -175,7 +248,7 @@ namespace EDINETHtmlExtractor
         {
             StringBuilder sb = new StringBuilder();
 
-            // BODYタグ以下の要素を対象に
+            // パフォーマンス向上のため、body以下のNodeを対象に抽出
             HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
             if (bodyNode == null)
             {
@@ -183,63 +256,72 @@ namespace EDINETHtmlExtractor
                 return;
             }
 
-            // 開始ノードと終了ノードのXPathを取得
-            string startXPath = startNode.XPath;
-            string endXPath = endNode.XPath;
+            Console.WriteLine($"開始ノード: {startNode.Name}, ID: {startNode.Id}, Class: {startNode.GetAttributeValue("class", "")}");
+            Console.WriteLine($"終了ノード: {endNode.Name}, ID: {endNode.Id}, Class: {endNode.GetAttributeValue("class", "")}");
 
-            Console.WriteLine($"開始ノードXPath: {startXPath}");
-            Console.WriteLine($"終了ノードXPath: {endXPath}");
+            bool captureStarted = false;
+            bool nodeFound = false;
+            List<HtmlNode> capturedNodes = new List<HtmlNode>();
 
-            bool isCapturing = false;
-            bool hasAddedStartNode = false;
+            // body以下の全ノードをフラットに取得して順に処理
+            var allNodes = new List<HtmlNode>();
+            CollectNodesFlat(bodyNode, allNodes);
 
-            // 階層順でコンテンツを収集
-            void TraverseAndCapture(HtmlNode node)
+            for (int i = 0; i < allNodes.Count; i++)
             {
-                // 開始ノードに到達
-                if (node == startNode)
+                var currentNode = allNodes[i];
+                
+                // 開始ノードに到達したら抽出開始
+                if (currentNode == startNode || currentNode.InnerText.Contains(START_SECTION_TITLE))
                 {
-                    isCapturing = true;
-                    sb.AppendLine(node.OuterHtml);
-                    hasAddedStartNode = true;
-                    return; // 開始ノードの子ノードは開始ノードのOuterHtmlに含まれるので再帰しない
+                    captureStarted = true;
+                    nodeFound = true;
+                    capturedNodes.Add(currentNode);
+                    continue;
                 }
-
-                // 終了ノードに到達
-                if (node == endNode)
+                
+                // 終了ノードに到達したら抽出終了
+                if (captureStarted && (currentNode == endNode || currentNode.InnerText.Contains(END_SECTION_TITLE)))
                 {
-                    isCapturing = false;
-                    return; // 終了ノードは含めない
+                    break;
                 }
-
-                // 開始ノードと終了ノードの間のノードを捕捉
-                if (isCapturing && node != startNode)
+                
+                // 開始ノードと終了ノードの間のノードを抽出
+                if (captureStarted)
                 {
-                    // 子ノードを持たない場合のみHTML追加
-                    if (!node.HasChildNodes)
-                    {
-                        sb.AppendLine(node.OuterHtml);
-                    }
-                }
-
-                // 子ノードに対して再帰
-                foreach (var child in node.ChildNodes)
-                {
-                    TraverseAndCapture(child);
+                    capturedNodes.Add(currentNode);
                 }
             }
 
-            // 探索開始
-            TraverseAndCapture(bodyNode);
-
-            // 開始ノードが追加されていなかった場合、明示的に追加
-            if (!hasAddedStartNode)
+            if (!nodeFound)
             {
-                sb.Insert(0, startNode.OuterHtml + Environment.NewLine);
+                Console.WriteLine("警告: 指定されたノードが見つかりませんでした。");
+                return;
+            }
+
+            // 抽出したノードのHTMLを結合
+            foreach (var node in capturedNodes)
+            {
+                sb.AppendLine(node.OuterHtml);
             }
 
             extractedContentList.Add(sb.ToString());
             Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
+        }
+
+        /// <summary>
+        /// すべてのノードをフラットに収集する
+        /// </summary>
+        private void CollectNodesFlat(HtmlNode node, List<HtmlNode> allNodes)
+        {
+            if (node == null) return;
+            
+            allNodes.Add(node);
+            
+            foreach (var childNode in node.ChildNodes)
+            {
+                CollectNodesFlat(childNode, allNodes);
+            }
         }
 
         /// <summary>
@@ -251,7 +333,7 @@ namespace EDINETHtmlExtractor
         {
             StringBuilder sb = new StringBuilder();
 
-            // BODYタグ以下の要素を対象に
+            // パフォーマンス向上のため、body以下のNodeを対象に抽出
             HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
             if (bodyNode == null)
             {
@@ -259,45 +341,46 @@ namespace EDINETHtmlExtractor
                 return;
             }
 
-            bool isCapturing = false;
-            bool hasAddedStartNode = false;
+            Console.WriteLine($"開始ノード: {startNode.Name}, ID: {startNode.Id}, Class: {startNode.GetAttributeValue("class", "")}");
 
-            // 階層順でコンテンツを収集
-            void TraverseAndCapture(HtmlNode node)
+            bool captureStarted = false;
+            bool nodeFound = false;
+            List<HtmlNode> capturedNodes = new List<HtmlNode>();
+
+            // body以下の全ノードをフラットに取得して順に処理
+            var allNodes = new List<HtmlNode>();
+            CollectNodesFlat(bodyNode, allNodes);
+
+            for (int i = 0; i < allNodes.Count; i++)
             {
-                // 開始ノードに到達
-                if (node == startNode)
+                var currentNode = allNodes[i];
+                
+                // 開始ノードに到達したら抽出開始
+                if (currentNode == startNode || currentNode.InnerText.Contains(START_SECTION_TITLE))
                 {
-                    isCapturing = true;
-                    sb.AppendLine(node.OuterHtml);
-                    hasAddedStartNode = true;
-                    return; // 開始ノードの子ノードは開始ノードのOuterHtmlに含まれるので再帰しない
+                    captureStarted = true;
+                    nodeFound = true;
+                    capturedNodes.Add(currentNode);
+                    continue;
                 }
-
-                // 開始ノード以降のノードを捕捉
-                if (isCapturing)
+                
+                // 開始ノード以降のノードを抽出
+                if (captureStarted)
                 {
-                    // 子ノードを持たない場合のみHTML追加
-                    if (!node.HasChildNodes)
-                    {
-                        sb.AppendLine(node.OuterHtml);
-                    }
-                }
-
-                // 子ノードに対して再帰
-                foreach (var child in node.ChildNodes)
-                {
-                    TraverseAndCapture(child);
+                    capturedNodes.Add(currentNode);
                 }
             }
 
-            // 探索開始
-            TraverseAndCapture(bodyNode);
-
-            // 開始ノードが追加されていなかった場合、明示的に追加
-            if (!hasAddedStartNode)
+            if (!nodeFound)
             {
-                sb.Insert(0, startNode.OuterHtml + Environment.NewLine);
+                Console.WriteLine("警告: 指定されたノードが見つかりませんでした。");
+                return;
+            }
+
+            // 抽出したノードのHTMLを結合
+            foreach (var node in capturedNodes)
+            {
+                sb.AppendLine(node.OuterHtml);
             }
 
             extractedContentList.Add(sb.ToString());
@@ -313,7 +396,7 @@ namespace EDINETHtmlExtractor
         {
             StringBuilder sb = new StringBuilder();
 
-            // BODYタグ以下の要素を対象に
+            // パフォーマンス向上のため、body以下のNodeを対象に抽出
             HtmlNode bodyNode = doc.DocumentNode.SelectSingleNode("//body");
             if (bodyNode == null)
             {
@@ -321,40 +404,41 @@ namespace EDINETHtmlExtractor
                 return;
             }
 
-            bool isCapturing = true;
+            Console.WriteLine($"終了ノード: {endNode.Name}, ID: {endNode.Id}, Class: {endNode.GetAttributeValue("class", "")}");
 
-            // 階層順でコンテンツを収集
-            void TraverseAndCapture(HtmlNode node)
+            bool nodeFound = false;
+            List<HtmlNode> capturedNodes = new List<HtmlNode>();
+
+            // body以下の全ノードをフラットに取得して順に処理
+            var allNodes = new List<HtmlNode>();
+            CollectNodesFlat(bodyNode, allNodes);
+
+            for (int i = 0; i < allNodes.Count; i++)
             {
-                // 終了ノードに到達
-                if (node == endNode)
+                var currentNode = allNodes[i];
+                
+                // 終了ノードに到達したら抽出終了
+                if (currentNode == endNode || currentNode.InnerText.Contains(END_SECTION_TITLE))
                 {
-                    isCapturing = false;
-                    return; // 終了ノードは含めない
+                    nodeFound = true;
+                    break;
                 }
-
-                // 終了ノードまでのノードを捕捉
-                if (isCapturing)
-                {
-                    // 子ノードを持たない場合のみHTML追加
-                    if (!node.HasChildNodes)
-                    {
-                        sb.AppendLine(node.OuterHtml);
-                    }
-                }
-
-                // 子ノードに対して再帰（捕捉中のみ）
-                if (isCapturing)
-                {
-                    foreach (var child in node.ChildNodes)
-                    {
-                        TraverseAndCapture(child);
-                    }
-                }
+                
+                // 終了ノードまでのノードを抽出
+                capturedNodes.Add(currentNode);
             }
 
-            // 探索開始
-            TraverseAndCapture(bodyNode);
+            if (!nodeFound)
+            {
+                Console.WriteLine("警告: 指定されたノードが見つかりませんでした。");
+                return;
+            }
+
+            // 抽出したノードのHTMLを結合
+            foreach (var node in capturedNodes)
+            {
+                sb.AppendLine(node.OuterHtml);
+            }
 
             extractedContentList.Add(sb.ToString());
             Console.WriteLine($"抽出されたコンテンツのサイズ: {sb.Length} 文字");
@@ -374,9 +458,14 @@ namespace EDINETHtmlExtractor
                 return;
             }
 
+            // 全てのコンテンツを収集
             foreach (var node in bodyNode.ChildNodes)
             {
-                sb.AppendLine(node.OuterHtml);
+                // コメントノードやテキストノードは除外
+                if (node.NodeType == HtmlNodeType.Element)
+                {
+                    sb.AppendLine(node.OuterHtml);
+                }
             }
 
             extractedContentList.Add(sb.ToString());
@@ -427,7 +516,8 @@ namespace EDINETHtmlExtractor
         /// </summary>
         /// <param name="contentList">抽出したHTML内容のリスト</param>
         /// <param name="filePath">保存先ファイルパス</param>
-        private void SaveToFile(List<string> contentList, string filePath)
+        /// <param name="styles">適用するスタイル情報</param>
+        private void SaveToFile(List<string> contentList, string filePath, string styles)
         {
             // ディレクトリが存在しない場合は作成
             string directory = Path.GetDirectoryName(filePath);
@@ -443,9 +533,18 @@ namespace EDINETHtmlExtractor
             sb.AppendLine("<head>");
             sb.AppendLine("<meta charset=\"UTF-8\">");
             sb.AppendLine("<title>抽出された損益計算書</title>");
+            
+            // 元のスタイル情報を追加
+            sb.AppendLine(styles);
+            
+            // 基本的なスタイルも追加
             sb.AppendLine("<style>");
             sb.AppendLine("body { font-family: Arial, sans-serif; margin: 20px; }");
+            sb.AppendLine("table { border-collapse: collapse; }");
+            sb.AppendLine("table, th, td { border: 1px solid #ccc; }");
+            sb.AppendLine("th, td { padding: 5px 10px; }");
             sb.AppendLine("</style>");
+            
             sb.AppendLine("</head>");
             sb.AppendLine("<body>");
 
@@ -477,13 +576,16 @@ namespace EDINETHtmlExtractor
                 extractionCompleted = false;
                 extractedContentList.Clear();
 
+                // スタイル情報を抽出
+                string styles = ExtractStyles(htmlFilePath);
+
                 // HTMLファイルを処理
                 ProcessHtmlFile(htmlFilePath);
 
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, styles);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
