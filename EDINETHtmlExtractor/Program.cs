@@ -22,6 +22,9 @@ namespace EDINETHtmlExtractor
         private bool extractionStarted = false;
         private bool extractionCompleted = false;
         private List<string> extractedContentList = new List<string>();
+        
+        // スタイル情報を保存する変数
+        private string extractedHeadContent = string.Empty;
 
         /// <summary>
         /// ディレクトリ内のHTMLファイルから指定されたセクションを抽出する
@@ -52,6 +55,13 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
+                extractedHeadContent = string.Empty;
+
+                // 最初のファイルからheadの内容を抽出
+                if (htmlFiles.Count > 0)
+                {
+                    extractedHeadContent = ExtractHeadContent(htmlFiles[0]);
+                }
 
                 // 各ファイルを順番に処理
                 foreach (string htmlFile in htmlFiles)
@@ -74,7 +84,7 @@ namespace EDINETHtmlExtractor
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, extractedHeadContent);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
@@ -88,6 +98,57 @@ namespace EDINETHtmlExtractor
             {
                 Console.WriteLine($"エラーが発生しました: {ex.Message}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// HTMLファイルからhead要素の内容を抽出する
+        /// </summary>
+        /// <param name="htmlFilePath">HTMLファイルのパス</param>
+        /// <returns>抽出されたhead要素の内容</returns>
+        private string ExtractHeadContent(string htmlFilePath)
+        {
+            try
+            {
+                HtmlDocument doc = new HtmlDocument();
+                doc.Load(htmlFilePath, Encoding.UTF8);
+
+                // headタグの取得
+                HtmlNode headNode = doc.DocumentNode.SelectSingleNode("//head");
+                if (headNode == null)
+                {
+                    Console.WriteLine("警告: headタグが見つかりませんでした。");
+                    return string.Empty;
+                }
+
+                StringBuilder headContent = new StringBuilder();
+
+                // styleタグとlinkタグ（CSSのみ）を抽出
+                var styleNodes = headNode.SelectNodes(".//style");
+                var linkNodes = headNode.SelectNodes(".//link[@rel='stylesheet']");
+
+                if (styleNodes != null)
+                {
+                    foreach (var styleNode in styleNodes)
+                    {
+                        headContent.AppendLine(styleNode.OuterHtml);
+                    }
+                }
+
+                if (linkNodes != null)
+                {
+                    foreach (var linkNode in linkNodes)
+                    {
+                        headContent.AppendLine(linkNode.OuterHtml);
+                    }
+                }
+
+                return headContent.ToString();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"head要素の抽出中にエラーが発生しました: {ex.Message}");
+                return string.Empty;
             }
         }
 
@@ -427,7 +488,8 @@ namespace EDINETHtmlExtractor
         /// </summary>
         /// <param name="contentList">抽出したHTML内容のリスト</param>
         /// <param name="filePath">保存先ファイルパス</param>
-        private void SaveToFile(List<string> contentList, string filePath)
+        /// <param name="headContent">元のHTML文書から抽出したhead要素の内容</param>
+        private void SaveToFile(List<string> contentList, string filePath, string headContent)
         {
             // ディレクトリが存在しない場合は作成
             string directory = Path.GetDirectoryName(filePath);
@@ -443,9 +505,21 @@ namespace EDINETHtmlExtractor
             sb.AppendLine("<head>");
             sb.AppendLine("<meta charset=\"UTF-8\">");
             sb.AppendLine("<title>抽出された損益計算書</title>");
+            
+            // 元のスタイル情報があれば追加
+            if (!string.IsNullOrEmpty(headContent))
+            {
+                sb.AppendLine(headContent);
+            }
+            
+            // 基本的なスタイルも追加
             sb.AppendLine("<style>");
             sb.AppendLine("body { font-family: Arial, sans-serif; margin: 20px; }");
+            sb.AppendLine("table { border-collapse: collapse; width: auto; }");
+            sb.AppendLine("table, th, td { border: 1px solid #ccc; }");
+            sb.AppendLine("th, td { padding: 5px 10px; text-align: left; }");
             sb.AppendLine("</style>");
+            
             sb.AppendLine("</head>");
             sb.AppendLine("<body>");
 
@@ -476,6 +550,9 @@ namespace EDINETHtmlExtractor
                 extractionStarted = false;
                 extractionCompleted = false;
                 extractedContentList.Clear();
+                
+                // headの内容を抽出
+                extractedHeadContent = ExtractHeadContent(htmlFilePath);
 
                 // HTMLファイルを処理
                 ProcessHtmlFile(htmlFilePath);
@@ -483,7 +560,7 @@ namespace EDINETHtmlExtractor
                 // 抽出したHTMLを保存
                 if (extractedContentList.Count > 0)
                 {
-                    SaveToFile(extractedContentList, outputFilePath);
+                    SaveToFile(extractedContentList, outputFilePath, extractedHeadContent);
                     Console.WriteLine($"セクションの抽出に成功しました。出力ファイル: {outputFilePath}");
                     return true;
                 }
